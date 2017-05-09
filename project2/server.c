@@ -10,10 +10,9 @@ The port number is passed as an argument
 
 int main(int argc, char **argv)
 {
-	int sockfd, newsockfd, portno, clilen;
-	char buffer[256], message[256];
+	int sockfd, newsockfd, portno, clilen, client = 0;
 	struct sockaddr_in serv_addr, cli_addr;
-	int n;
+	pthread_t clients[MAX_CLIENTS];
 	
 	if (argc < 2) 
 	{
@@ -62,69 +61,15 @@ int main(int argc, char **argv)
 
 	/* Accept a connection - block until a connection is ready to
 	 be accepted. Get back a new file descriptor to communicate on. */
-
+	while(1){
 	newsockfd = accept(	sockfd, (struct sockaddr *) &cli_addr, 
 						&clilen);
-
-	if (newsockfd < 0) 
-	{
-		perror("ERROR on accept");
-		exit(1);
-	}
 	
-	bzero(buffer,256);
-
-	/* Read characters from the connection,
-		then process */
-	
-	n = read(newsockfd,buffer,255);
-
-	if (n < 0) 
-	{
-		perror("ERROR reading from socket");
-		exit(1);
-	}
-	
-	//check which protocol is being used and respond appropriately
-	if(buffer[4] == '\r' && buffer[5] == '\n'){
-		if(buffer[0] == 'P' && buffer[2] == 'N' && buffer[3] == 'G'){
-		
-			if(buffer[1] == 'I'){
-				n = write(newsockfd, "PONG\r\n" , 6);
-			}
-			else if(buffer[1] == 'O'){
-				n = write(newsockfd, pong_message ,strlen(pong_message));
-			}
-			else{
-				n = write(newsockfd, almost_ping ,strlen(almost_ping));
-			}
-		}
-		else if(buffer[0] == 'O' && buffer[1] == 'K' && buffer[2] == 'A'
-			&& buffer[3] == 'Y'){
-			n = write(newsockfd, okay_message ,strlen(okay_message));
-		}
-		else if(buffer[0] == 'E' && buffer[1] == 'R' && buffer[2] == 'R'
-			&& buffer[3] == 'O'){
-			n = write(newsockfd, erro_message ,strlen(erro_message));
-		}
-		else{
-			n = write(newsockfd, erro_message ,strlen(erro_message));
-		}
-	}
-	else{
-		//error about delimiting 
-		n = write(newsockfd, deli_message, strlen(deli_message));
-	}
-
-	
-	if (n < 0) 
-	{
-		perror("ERROR writing to socket");
-		exit(1);
-	}
-
+	//call thread to handle new connection
+	pthread_create(clients+client, NULL, receptionist, &newsockfd);
+	client++;
 	/* close socket */
-	
+	}
 	close(sockfd);
 	
 	return 0; 
