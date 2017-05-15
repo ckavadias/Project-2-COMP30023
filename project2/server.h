@@ -9,6 +9,8 @@
 #include <pthread.h>
 #include "sha256.h"
 #include "uint256.h"
+#include <time.h>
+#include <semaphore.h>
 
 //Provided Limitations 
 #define MAX_CLIENTS 100
@@ -28,13 +30,58 @@ char* solution = "ERRO solution is incorrect";
 
 //shared parameters
 int off = MAX_ERR - 2;
+FILE* logfile = NULL;
+
+//mutex paramters
+sem_t log_mutex;
+sem_t queue_mutex;
 
 //structs for solution and work calls
 typedef struct {
 	int newsockfd;
+	pthread_t thread_id;
+	uint32_t IP;
 	char* string;
 }proof_t;
 
+/*log file functions*/
+
+//open log file
+void log_open(){
+	logfile = fopen("log.txt", "w");
+}
+
+//adapted from http://stackoverflow.com/questions/9596945/how-to-get-
+//appropriate-timestamp-in-c-for-logs
+void log_write(proof_t* info){
+	time_t ltime;
+	uint32_t one, two, three, four;
+	
+    ltime=time(NULL);
+    
+    //convert IP address to useful format
+    one = info->IP>>24;
+    two = info->IP<<8;
+    two = two>>24;
+    three = info->IP<<16;
+    three = three>>24;
+    four = info->IP<<24;
+    four = four>>24;
+    
+    //set up mutex first to avoid conflicted prints
+    sem_wait(&log_mutex);
+    
+    fprintf(logfile, "%s IP:%u.%u.%u.%u , Socket ID: %d , Message: %s\n ",
+    	asctime(localtime(&ltime)),four, three, two, one ,info->newsockfd, 
+    		info->string);
+    
+    //now flush to avoid data loss
+    fflush(logfile);
+    
+    sem_post(&log_mutex);
+}
+
+/* Thread functions */
 //thread function to handle proof of work for solution messages
 void* is_solution(void* param){
 	int newsockfd = ((proof_t*)param)->newsockfd, i, n;
@@ -114,13 +161,12 @@ void* is_solution(void* param){
 }
 
 //thread caller to handle socket connection
-void* receptionist(void* param){
+void* receptionist(void* proof){
 	int newsockfd, n = 1;
 	char buffer[MAX_BUF + 1], error[MAX_ERR + 1];
-	proof_t proof;
 	pthread_t thread;
 	
-	newsockfd = *((int*)param);
+	newsockfd = ((proof_t*)proof)->newsockfd;
 	
 	while(n != 0){
 	if (newsockfd < 0) 
@@ -146,6 +192,9 @@ void* receptionist(void* param){
 	//(need to add security check for message lengths)
 	if(n > 0){
 		buffer[n] = '\0';
+		((proof_t*)proof)->string = buffer;
+		log_write(proof);
+		
 	   if(buffer[strlen(buffer) - 2] == '\r'&&buffer[strlen(buffer)-1] == '\n'){
 			if(buffer[0] == 'P' && buffer[2] == 'N' && buffer[3] == 'G'){
 		
@@ -175,8 +224,6 @@ void* receptionist(void* param){
 				&& buffer[3] == 'N'){
 				//solve with a new thread
 				//send with a struct containing newsockfd and solution string
-				proof.newsockfd = newsockfd;
-				proof.string = buffer;
 				pthread_create(&thread, NULL, is_solution, &proof);
 				
 				}
