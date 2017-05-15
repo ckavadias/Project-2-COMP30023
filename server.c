@@ -7,7 +7,6 @@ The port number is passed as an argument
 
 #include "server.h"
 
-
 int main(int argc, char **argv)
 {
 	int sockfd, newsockfd, portno, clilen, client = 0;
