@@ -9,9 +9,14 @@ The port number is passed as an argument
 
 int main(int argc, char **argv)
 {
-	int sockfd, newsockfd, portno, clilen, client = 0;
+	int sockfd, newsockfd, portno, clilen, i = 0;
 	struct sockaddr_in serv_addr, cli_addr;
-	pthread_t clients[MAX_CLIENTS];
+	proof_t clients[MAX_CLIENTS];
+	
+	//open log and initialise semaphores
+	log_open();
+	sem_init(&log_mutex, 0, 1);
+	sem_init(&queue_mutex, 0, 1);
 	
 	if (argc < 2) 
 	{
@@ -65,10 +70,13 @@ int main(int argc, char **argv)
 						&clilen);
 	
 	//call thread to handle new connection
-	pthread_create(clients+client, NULL, receptionist, &newsockfd);
-	client++;
-	/* close socket */
+	clients[i].newsockfd = newsockfd;
+	clients[i].IP = cli_addr.sin_addr.s_addr;
+	pthread_create(&(clients[i].thread_id), NULL, receptionist, clients + i);
+	i++;
 	}
+	
+	/* close socket */
 	close(sockfd);
 	
 	return 0; 
