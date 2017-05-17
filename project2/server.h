@@ -28,21 +28,23 @@ char* delim = "ERRO delimiting incorrect";
 char* almost = "ERRO almost ping, check the spelling";
 char* solution = "ERRO solution is incorrect";
 
+//structs for solution and work calls
+typedef struct {
+	int newsockfd;
+	uint64_t start_at;
+	pthread_t thread_id;
+	uint32_t IP;
+	char* string;
+}proof_t;
+
 //shared parameters
 int off = MAX_ERR - 2;
+proof_t work_queue[10];
 FILE* logfile = NULL;
 
 //mutex paramters
 sem_t log_mutex;
 sem_t queue_mutex;
-
-//structs for solution and work calls
-typedef struct {
-	int newsockfd;
-	pthread_t thread_id;
-	uint32_t IP;
-	char* string;
-}proof_t;
 
 /*log file functions*/
 
@@ -84,15 +86,17 @@ void log_write(proof_t* info){
 /* Thread functions */
 //thread function to handle proof of work for solution messages
 void* is_solution(void* param){
-	int newsockfd = ((proof_t*)param)->newsockfd, i, n;
+	int newsockfd = ((proof_t*)param)->newsockfd, i, n, j = 0;
 	char* buffer = ((proof_t*)param)->string;
-	char seed_char[MAX_SEED + 1], error[MAX_ERR + 1];
+	char seed_char[MAX_SEED + 1], error[MAX_ERR + 1], store[3];
 	BYTE seed[MAX_SEED], input, two_num = 2;
 	BYTE two[MAX_UINT], beta_256[MAX_UINT], exp[MAX_UINT], target[MAX_UINT];
-	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE];
+	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE], temp;
 	uint32_t diff, alpha, beta, mask;
 	uint64_t soln, mask_64;
 	SHA256_CTX ctx, ctx2;
+	
+	store[2] = '\0';
 	
 	//initialise 2 in uint256_t form
 	uint256_init(two);
@@ -103,10 +107,17 @@ void* is_solution(void* param){
 	
 	//scan string and store values appropriately
 	sscanf(buffer + 5, "%x %s %llx\r\n", &diff, seed_char, &soln);
-	seed_char[32] = '\n';
+	seed_char[32] = '\0';
 	
 	//scan char into unsigned char
-	sscanf(seed_char, "%hhu\n", seed);
+	for(i = 0; i < strlen(seed_char); i++){
+		
+		store[0] = seed_char[i];
+		store[1] = seed_char[i + 1];
+		
+		seed[j] = (BYTE)strtol(store, NULL, 16);
+		j++;
+	}
 	
 	//concatenate soln into seed
 	for(i = 0; i < 8; i++){
@@ -114,7 +125,7 @@ void* is_solution(void* param){
 		mask_64 = mask_64<<(56 - 8*i);
 		mask_64 = mask_64>>56;
 		input = (BYTE)mask_64;
-		seed[37 - i] = mask_64;
+		seed[39 - i] = mask_64;
 	}
 	
 	//use right shift to find alpha
@@ -156,6 +167,116 @@ void* is_solution(void* param){
 	else{
 		sprintf(error,"%s%*c\r\n", solution, off-strlen(solution),'#');
 					n = write(newsockfd, error ,MAX_ERR);
+	}
+	return NULL;
+}
+
+//thread to add to queue to ensure mutex lock doesnt prevent repsonses
+void* add_queue(void* param){
+	//mutex check
+	//find next free
+	//add param to next free
+	//if none free block until free
+	return NULL;
+}
+
+//persistent worker thread to call worker
+void* work_manager(){
+	
+	//mutex check
+	//see if queue empty
+	//if not take next job
+	//call worker to start worker
+	//increment counter
+	
+	return NULL;
+}
+//worker thread to find a solution to a work problem 
+void* worker(void* info){
+	int newsockfd = ((proof_t*)info)->newsockfd, i, n, j = 0;
+	char* buffer = ((proof_t*)info)->string;
+	char seed_char[MAX_SEED + 1], error[MAX_ERR + 1], store[3];
+	BYTE seed[MAX_SEED], input, two_num = 2;
+	BYTE two[MAX_UINT], beta_256[MAX_UINT], exp[MAX_UINT], target[MAX_UINT];
+	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE], temp;
+	uint32_t diff, alpha, beta, mask;
+	uint64_t soln, mask_64;
+	SHA256_CTX ctx, ctx2;
+	
+	store[2] = '\0';
+	soln = ((proof_t*)info)->start_at;
+	
+	//initialise 2 in uint256_t form
+	uint256_init(two);
+	two[31] = two_num;
+	
+	uint256_init(beta_256);
+	
+	
+	//scan string and store values appropriately
+	sscanf(buffer + 5, "%x %s ", &diff, seed_char);
+	seed_char[32] = '\0';
+	
+	//scan char into unsigned char
+	for(i = 0; i < strlen(seed_char); i++){
+		
+		store[0] = seed_char[i];
+		store[1] = seed_char[i + 1];
+		
+		seed[j] = (BYTE)strtol(store, NULL, 16);
+		j++;
+	}
+	
+	//use right shift to find alpha
+	alpha = diff;
+	alpha = alpha>>24;
+	
+	//use left shift followed by right shift to delete alpha and find beta
+	//insert into uint256
+	beta = diff;
+	beta = beta<<8;
+	beta = beta>>8;
+	
+	//add BYTE segments of beta to beta_256
+	for(i = 0; i < 4; i++){
+		mask = beta;
+		mask = mask<<(24 - 8*i);
+		mask = mask>>24;
+		input = (BYTE)mask;
+		beta_256[31 - i] = input;
+	}
+	
+	//take exponential result, multiply by beta
+	uint256_exp(exp, two, alpha - 3);
+	uint256_mul(target, beta_256, exp);
+	
+	while(1){
+		//concatenate soln into seed
+		for(i = 0; i < 8; i++){
+			mask_64 = soln;
+			mask_64 = mask_64<<(56 - 8*i);
+			mask_64 = mask_64>>56;
+			input = (BYTE)mask_64;
+			seed[39 - i] = mask_64;
+		}
+	
+		//hash seed
+		sha256_init(&ctx);
+		sha256_update(&ctx, seed, 40);
+		sha256_final(&ctx, hash);
+	
+		//hash the hash
+		sha256_init(&ctx2);
+		sha256_update(&ctx2, hash, SHA256_BLOCK_SIZE);
+		sha256_final(&ctx2, hash2);
+		
+		if( sha256_compare(hash2, target) < 0){
+			//write necessary ouput
+			//remove from queue
+			return NULL;
+		}
+		
+		soln++;
 	}
 	return NULL;
 }
@@ -226,6 +347,12 @@ void* receptionist(void* proof){
 				//send with a struct containing newsockfd and solution string
 				pthread_create(&thread, NULL, is_solution, &proof);
 				
+				}
+			else if(buffer[0] == 'W' &&  buffer[1] == 'O' && buffer[2] == 'R'
+				&& buffer[3] == 'K'){
+				//find out start value from buffer
+				//edit struct to comply
+				//call worker thread to add to queue
 				}
 			else{
 				 sprintf(error,"%s%*c\r\n", gen, off-strlen(gen),'#');

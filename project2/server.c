@@ -56,24 +56,24 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 	
-	/* Listen on socket - means we're ready to accept connections - 
-	 incoming connection requests will be queued */
-	
-	listen(sockfd,5);
-	
-	clilen = sizeof(cli_addr);
-
-	/* Accept a connection - block until a connection is ready to
-	 be accepted. Get back a new file descriptor to communicate on. */
 	while(1){
-	newsockfd = accept(	sockfd, (struct sockaddr *) &cli_addr, 
+		/* Listen on socket - means we're ready to accept connections - 
+		incoming connection requests will be queued */
+	
+		listen(sockfd,5);
+		
+		clilen = sizeof(cli_addr);
+
+		/* Accept a connection - block until a connection is ready to
+		be accepted. Get back a new file descriptor to communicate on. */
+		newsockfd = accept(	sockfd, (struct sockaddr *) &cli_addr, 
 						&clilen);
 	
-	//call thread to handle new connection
-	clients[i].newsockfd = newsockfd;
-	clients[i].IP = cli_addr.sin_addr.s_addr;
-	pthread_create(&(clients[i].thread_id), NULL, receptionist, clients + i);
-	i++;
+		//call thread to handle new connection
+		clients[i].newsockfd = newsockfd;
+		clients[i].IP = cli_addr.sin_addr.s_addr;
+	   pthread_create(&(clients[i].thread_id), NULL, receptionist, clients + i);
+	   i++;
 	}
 	
 	/* close socket */
