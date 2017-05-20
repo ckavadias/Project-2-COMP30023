@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +17,7 @@
 #define MAX_BUF 255
 #define MAX_SEED 64
 #define MAX_UINT 32
+#define QUEUE_SIZE 10
 
 //standard error messages
 char* pong = "ERRO PONG is only for the server";
@@ -31,20 +31,21 @@ char* solution = "ERRO solution is incorrect";
 //structs for solution and work calls
 typedef struct {
 	int newsockfd;
-	uint64_t start_at;
 	pthread_t thread_id;
 	uint32_t IP;
+	int index;
 	char* string;
 }proof_t;
 
 //shared parameters
 int off = MAX_ERR - 2;
-proof_t work_queue[10];
+proof_t* work_queue[QUEUE_SIZE];
+int next_ready = 0;
 FILE* logfile = NULL;
 
 //mutex paramters
 sem_t log_mutex;
-sem_t queue_mutex;
+sem_t work_mutex;
 
 /*log file functions*/
 
@@ -87,15 +88,16 @@ void log_write(proof_t* info){
 //thread function to handle proof of work for solution messages
 void* is_solution(void* param){
 	int newsockfd = ((proof_t*)param)->newsockfd, i, n, j = 0;
-	char* buffer = ((proof_t*)param)->string;
+	char buffer[strlen(((proof_t*)param)->string) + 1];
 	char seed_char[MAX_SEED + 1], error[MAX_ERR + 1], store[3];
 	BYTE seed[MAX_SEED], input, two_num = 2;
 	BYTE two[MAX_UINT], beta_256[MAX_UINT], exp[MAX_UINT], target[MAX_UINT];
-	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE], temp;
+	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE];
 	uint32_t diff, alpha, beta, mask;
 	uint64_t soln, mask_64;
 	SHA256_CTX ctx, ctx2;
 	
+	strcpy(buffer, ((proof_t*)param)->string);
 	store[2] = '\0';
 	
 	//initialise 2 in uint256_t form
@@ -104,10 +106,9 @@ void* is_solution(void* param){
 	
 	uint256_init(beta_256);
 	
-	
 	//scan string and store values appropriately
-	sscanf(buffer + 5, "%x %s %llx\r\n", &diff, seed_char, &soln);
-	seed_char[32] = '\0';
+	sscanf(buffer, "SOLN %x %s %llx\r\n", &diff, seed_char, &soln);
+	seed_char[64] = '\0';
 	
 	//scan char into unsigned char
 	for(i = 0; i < strlen(seed_char); i++){
@@ -173,38 +174,45 @@ void* is_solution(void* param){
 
 //thread to add to queue to ensure mutex lock doesnt prevent repsonses
 void* add_queue(void* param){
-	//mutex check
-	//find next free
-	//add param to next free
-	//if none free block until free
+	int added = 0;
+	proof_t copy = *((proof_t*)param);
+	
+	//The entry specified by next ready may not be empty yet but we can't
+	//hold the lock as it will prevent any spaces from being freed
+	//cycle through holding and letting go of the lock to allow other 
+	//threads to grab the lock and process entries to free array space
+	
+	while(!added){
+		
+		sem_wait(&work_mutex);
+		if(work_queue[next_ready] == NULL){
+			copy.index = next_ready;
+			work_queue[next_ready] = (proof_t*)malloc(sizeof(proof_t));
+			*(work_queue[next_ready]) = copy;
+			next_ready++;
+			next_ready%=QUEUE_SIZE;
+			added++;
+		}
+		sem_post(&work_mutex);
+	}
 	return NULL;
 }
 
-//persistent worker thread to call worker
-void* work_manager(){
-	
-	//mutex check
-	//see if queue empty
-	//if not take next job
-	//call worker to start worker
-	//increment counter
-	
-	return NULL;
-}
 //worker thread to find a solution to a work problem 
 void* worker(void* info){
-	int newsockfd = ((proof_t*)info)->newsockfd, i, n, j = 0;
-	char* buffer = ((proof_t*)info)->string;
-	char seed_char[MAX_SEED + 1], error[MAX_ERR + 1], store[3];
+	int newsockfd = ((proof_t*)info)->newsockfd,index = ((proof_t*)info)->index,
+	i, n, j = 0;
+	char buffer[strlen(((proof_t*)info)->string) + 1];
+	char seed_char[MAX_SEED + 1], store[3], message[255];
 	BYTE seed[MAX_SEED], input, two_num = 2;
 	BYTE two[MAX_UINT], beta_256[MAX_UINT], exp[MAX_UINT], target[MAX_UINT];
-	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE], temp;
+	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE];
 	uint32_t diff, alpha, beta, mask;
 	uint64_t soln, mask_64;
 	SHA256_CTX ctx, ctx2;
-	
+
+	strcpy(buffer, ((proof_t*)info)->string);
 	store[2] = '\0';
-	soln = ((proof_t*)info)->start_at;
 	
 	//initialise 2 in uint256_t form
 	uint256_init(two);
@@ -212,10 +220,9 @@ void* worker(void* info){
 	
 	uint256_init(beta_256);
 	
-	
 	//scan string and store values appropriately
-	sscanf(buffer + 5, "%x %s ", &diff, seed_char);
-	seed_char[32] = '\0';
+	sscanf(buffer, "WORK %x %s %llx", &diff, seed_char, &soln);
+	seed_char[64] = '\0';
 	
 	//scan char into unsigned char
 	for(i = 0; i < strlen(seed_char); i++){
@@ -251,6 +258,7 @@ void* worker(void* info){
 	uint256_mul(target, beta_256, exp);
 	
 	while(1){
+		//fprintf(stderr, "trying soln: %llx\n", soln);
 		//concatenate soln into seed
 		for(i = 0; i < 8; i++){
 			mask_64 = soln;
@@ -272,7 +280,10 @@ void* worker(void* info){
 		
 		if( sha256_compare(hash2, target) < 0){
 			//write necessary ouput
+			sprintf(message, "SOLN %x %s %llx\r\n", diff, seed_char, soln);
+			 n = write(newsockfd, message ,strlen(message));
 			//remove from queue
+			work_queue[index] = NULL;
 			return NULL;
 		}
 		
@@ -281,10 +292,33 @@ void* worker(void* info){
 	return NULL;
 }
 
+//persistent worker thread to call worker
+void* work_manager(){
+	pthread_t current;
+	int next = 0;
+	
+	while(1){
+		//mutex check
+		sem_wait(&work_mutex);
+	
+		//see if queue empty
+		if(work_queue[next] != NULL){
+			//if not take next job and call worker
+			pthread_create(&current, NULL, worker, work_queue[next]);
+			//increment next_ready and modulus QUEUE_SIZE
+			next++;
+			next%=QUEUE_SIZE;
+		}
+		sem_post(&work_mutex);
+	}
+	
+	return NULL;
+}
+
 //thread caller to handle socket connection
 void* receptionist(void* proof){
 	int newsockfd, n = 1;
-	char buffer[MAX_BUF + 1], error[MAX_ERR + 1];
+	char buffer[MAX_BUF + 1], passing[MAX_BUF + 1], error[MAX_ERR + 1];
 	pthread_t thread;
 	
 	newsockfd = ((proof_t*)proof)->newsockfd;
@@ -313,7 +347,9 @@ void* receptionist(void* proof){
 	//(need to add security check for message lengths)
 	if(n > 0){
 		buffer[n] = '\0';
-		((proof_t*)proof)->string = buffer;
+		strcpy(passing, buffer);
+		
+		((proof_t*)proof)->string = passing;
 		log_write(proof);
 		
 	   if(buffer[strlen(buffer) - 2] == '\r'&&buffer[strlen(buffer)-1] == '\n'){
@@ -345,14 +381,12 @@ void* receptionist(void* proof){
 				&& buffer[3] == 'N'){
 				//solve with a new thread
 				//send with a struct containing newsockfd and solution string
-				pthread_create(&thread, NULL, is_solution, &proof);
-				
+				pthread_create(&thread, NULL, is_solution, proof);
 				}
 			else if(buffer[0] == 'W' &&  buffer[1] == 'O' && buffer[2] == 'R'
 				&& buffer[3] == 'K'){
-				//find out start value from buffer
-				//edit struct to comply
-				//call worker thread to add to queue
+				//call add queue to stop a mutex lock from halting thread
+				pthread_create(&thread, NULL, add_queue, proof);
 				}
 			else{
 				 sprintf(error,"%s%*c\r\n", gen, off-strlen(gen),'#');

@@ -9,15 +9,16 @@ The port number is passed as an argument
 
 int main(int argc, char **argv)
 {
-	int sockfd, newsockfd, portno, clilen, i = 0;
+	int sockfd, newsockfd, portno, clilen, i = 0, j;
 	struct sockaddr_in serv_addr, cli_addr;
 	proof_t clients[MAX_CLIENTS];
+	pthread_t workers;
 	
 	//open log and initialise semaphores
 	log_open();
 	sem_init(&log_mutex, 0, 1);
-	sem_init(&queue_mutex, 0, 1);
-	
+	sem_init(&work_mutex, 0, 1);
+
 	if (argc < 2) 
 	{
 		fprintf(stderr,"ERROR, no port provided\n");
@@ -56,11 +57,18 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 	
+	//initialise work queue to null
+	for(j = 0; j < QUEUE_SIZE; j++){
+		work_queue[j] = NULL;
+	}
+	
+	pthread_create(&workers, NULL, work_manager, NULL);
+	
 	while(1){
 		/* Listen on socket - means we're ready to accept connections - 
 		incoming connection requests will be queued */
 	
-		listen(sockfd,5);
+		listen(sockfd,MAX_CLIENTS);
 		
 		clilen = sizeof(cli_addr);
 
@@ -68,7 +76,6 @@ int main(int argc, char **argv)
 		be accepted. Get back a new file descriptor to communicate on. */
 		newsockfd = accept(	sockfd, (struct sockaddr *) &cli_addr, 
 						&clilen);
-	
 		//call thread to handle new connection
 		clients[i].newsockfd = newsockfd;
 		clients[i].IP = cli_addr.sin_addr.s_addr;
