@@ -27,6 +27,7 @@ char* gen = "ERRO Invalid protocol try again";
 char* delim = "ERRO delimiting incorrect";
 char* almost = "ERRO almost ping, check the spelling";
 char* solution = "ERRO solution is incorrect";
+char* abrt = "ERRO nothing to abort";
 
 //structs for solution and work calls
 typedef struct {
@@ -314,6 +315,30 @@ void* work_manager(){
 	
 	return NULL;
 }
+//kill or worker threads relating to socket described by newsockfd
+void* kill_them_all(void* num){
+	int newsockfd = *((int*)num), i;
+	int kills = 0;
+	char error[MAX_ERR + 1];
+	
+	sem_wait(&work_mutex);
+	for( i = 0; i < QUEUE_SIZE; i++){
+		if(work_queue[i] != NULL && work_queue[i]->newsockfd == newsockfd){
+			pthread_cancel(work_queue[i]->thread_id);
+			work_queue[i] = NULL;
+			kills++;
+		}
+	}
+	if(kills){
+		write(newsockfd, "OKAY\r\n", 6);
+	}
+	else{
+		sprintf(error,"%s%*c\r\n", abrt, off-strlen(abrt),'#');
+		write(newsockfd, error, MAX_ERR);
+	}
+	sem_post(&work_mutex);
+	return NULL;
+}
 
 //thread caller to handle socket connection
 void* receptionist(void* proof){
@@ -386,8 +411,15 @@ void* receptionist(void* proof){
 			else if(buffer[0] == 'W' &&  buffer[1] == 'O' && buffer[2] == 'R'
 				&& buffer[3] == 'K'){
 				//call add queue to stop a mutex lock from halting thread
-				pthread_create(&thread, NULL, add_queue, proof);
+				pthread_create(&(((proof_t*)proof)->thread_id), NULL, 
+					add_queue, proof);
 				}
+			else if(buffer[0] == 'A' && buffer[1] == 'B' && buffer[2] == 'R'
+				&& buffer[3] == 'T'){
+				// call thread to traverse work queue and remove items
+				//this ensures other messages an still be recieved will aborting
+				pthread_create(&thread, NULL, kill_them_all, &newsockfd);
+			}
 			else{
 				 sprintf(error,"%s%*c\r\n", gen, off-strlen(gen),'#');
 				 n = write(newsockfd, error ,MAX_ERR);
