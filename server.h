@@ -104,7 +104,6 @@ void* is_solution(void* param){
 	//initialise 2 in uint256_t form
 	uint256_init(two);
 	two[31] = two_num;
-	
 	uint256_init(beta_256);
 	
 	//scan string and store values appropriately
@@ -112,7 +111,7 @@ void* is_solution(void* param){
 	seed_char[64] = '\0';
 	
 	//scan char into unsigned char
-	for(i = 0; i < strlen(seed_char); i++){
+	for(i = 0; i < strlen(seed_char); i+=2){
 		
 		store[0] = seed_char[i];
 		store[1] = seed_char[i + 1];
@@ -150,7 +149,7 @@ void* is_solution(void* param){
 	}
 	
 	//take exponential result, multiply by beta
-	uint256_exp(exp, two, alpha - 3);
+	uint256_exp(exp, two, 8*(alpha - 3));
 	uint256_mul(target, beta_256, exp);
 	
 	//hash seed
@@ -226,7 +225,7 @@ void* worker(void* info){
 	seed_char[64] = '\0';
 	
 	//scan char into unsigned char
-	for(i = 0; i < strlen(seed_char); i++){
+	for(i = 0; i < strlen(seed_char); i+=2){
 		
 		store[0] = seed_char[i];
 		store[1] = seed_char[i + 1];
@@ -255,7 +254,7 @@ void* worker(void* info){
 	}
 	
 	//take exponential result, multiply by beta
-	uint256_exp(exp, two, alpha - 3);
+	uint256_exp(exp, two, 8*(alpha - 3));
 	uint256_mul(target, beta_256, exp);
 	
 	while(1){
