@@ -1,28 +1,7 @@
-Sat May 20 13:37:10 2017
- IP:128.250.0.68 , Socket ID: 6 , Message: PING
+Sat May 20 15:53:34 2017
+ IP:128.250.0.82 , Socket ID: 6 , Message: PING
 
- Sat May 20 13:37:13 2017
- IP:128.250.0.68 , Socket ID: 6 , Message: PANG
-
- Sat May 20 13:37:17 2017
- IP:127.0.0.1 , Socket ID: 5 , Message: OKAY
-
- Sat May 20 13:37:20 2017
- IP:127.0.0.1 , Socket ID: 5 , Message: ERRO
-
- Sat May 20 13:37:23 2017
- IP:127.0.0.1 , Socket ID: 5 , Message: PONG
-
- Sat May 20 13:37:29 2017
- IP:127.0.0.1 , Socket ID: 5 , Message: ABRT
-
- Sat May 20 13:37:34 2017
- IP:128.250.0.68 , Socket ID: 6 , Message: ABRT
-
- Sat May 20 13:37:41 2017
- IP:128.250.0.68 , Socket ID: 6 , Message: WORK 1fffffff 0000000019d6689c085ae165831e934ff763ae46a218a6c172b3f1b60a8ce26f 1000000023212399 02
-
- Sat May 20 13:38:18 2017
- IP:128.250.0.68 , Socket ID: 6 , Message: ABRT
+ Sat May 20 15:53:39 2017
+ IP:128.250.0.82 , Socket ID: 6 , Message: OKAY
 
  
