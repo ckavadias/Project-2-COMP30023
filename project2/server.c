@@ -1,10 +1,6 @@
-/* A simple server in the internet domain using TCP
-The port number is passed as an argument 
-
-
- To compile: gcc server.c -o server 
-*/
-
+/* Project 2 COMP30023 Semester 1, 2017 Constanintos Kavadias, 664790
+	ckavadias@unimelb.edu.au */
+	
 #include "server.h"
 
 int main(int argc, char **argv)
@@ -68,7 +64,7 @@ int main(int argc, char **argv)
 		/* Listen on socket - means we're ready to accept connections - 
 		incoming connection requests will be queued */
 	
-		listen(sockfd,MAX_CLIENTS);
+		listen(sockfd, MAX_CLIENTS);
 		
 		clilen = sizeof(cli_addr);
 
@@ -76,11 +72,16 @@ int main(int argc, char **argv)
 		be accepted. Get back a new file descriptor to communicate on. */
 		newsockfd = accept(	sockfd, (struct sockaddr *) &cli_addr, 
 						&clilen);
+		if (newsockfd < 0) {
+			perror("ERROR on accept");
+			exit(1);
+		}
 		//call thread to handle new connection
 		clients[i].newsockfd = newsockfd;
 		clients[i].IP = cli_addr.sin_addr.s_addr;
 	   pthread_create(&(clients[i].thread_id), NULL, receptionist, clients + i);
 	   i++;
+	   i%=MAX_CLIENTS;
 	}
 	
 	/* close socket */

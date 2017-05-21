@@ -1,3 +1,6 @@
+/* Project 2 COMP30023 Semester 1, 2017 Constanintos Kavadias, 664790
+	ckavadias@unimelb.edu.au */
+	
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +38,7 @@ typedef struct {
 	pthread_t thread_id;
 	uint32_t IP;
 	int index;
+	int offset;
 	char* string;
 }proof_t;
 
@@ -201,7 +205,7 @@ void* add_queue(void* param){
 //worker thread to find a solution to a work problem 
 void* worker(void* info){
 	int newsockfd = ((proof_t*)info)->newsockfd,index = ((proof_t*)info)->index,
-	i, n, j = 0;
+	i, n, j = 0, offset = ((proof_t*)info)->offset ;
 	char buffer[strlen(((proof_t*)info)->string) + 1];
 	char seed_char[MAX_SEED + 1], store[3], message[255];
 	BYTE seed[MAX_SEED], input, two_num = 2;
@@ -257,7 +261,9 @@ void* worker(void* info){
 	uint256_exp(exp, two, 8*(alpha - 3));
 	uint256_mul(target, beta_256, exp);
 	
-	while(1){
+	while(work_queue[index] != NULL){
+		sem_post(&work_mutex);
+		soln+=offset;
 		//fprintf(stderr, "trying soln: %llx\n", soln);
 		//concatenate soln into seed
 		for(i = 0; i < 8; i++){
@@ -279,15 +285,18 @@ void* worker(void* info){
 		sha256_final(&ctx2, hash2);
 		
 		if( sha256_compare(hash2, target) < 0){
-			//write necessary ouput
+			//write necessary output
 			sprintf(message, "SOLN %x %s %llx\r\n", diff, seed_char, soln);
-			 n = write(newsockfd, message ,strlen(message));
+			n = write(newsockfd, message ,strlen(message));
 			//remove from queue
+			sem_wait(&work_mutex);
 			work_queue[index] = NULL;
+			sem_post(&work_mutex);
 			return NULL;
 		}
 		
 		soln++;
+		sem_wait(&work_mutex);
 	}
 	return NULL;
 }
@@ -295,7 +304,10 @@ void* worker(void* info){
 //persistent worker thread to call worker
 void* work_manager(){
 	pthread_t current;
-	int next = 0;
+	int next = 0, n, i;
+	uint32_t x;
+	uint64_t y;
+	char d[MAX_SEED + 1];
 	
 	while(1){
 		//mutex check
@@ -304,7 +316,11 @@ void* work_manager(){
 		//see if queue empty
 		if(work_queue[next] != NULL){
 			//if not take next job and call worker
-			pthread_create(&current, NULL, worker, work_queue[next]);
+            sscanf(work_queue[next]->string, "WORK %x %s %llx %x", &x,d,&y, &n);
+            for( i = 0;  i < n; i++){
+            	work_queue[next]->offset = i;
+            	pthread_create(&current, NULL, worker, work_queue[next]);
+            }
 			//increment next_ready and modulus QUEUE_SIZE
 			next++;
 			next%=QUEUE_SIZE;
@@ -348,11 +364,6 @@ void* receptionist(void* proof){
 	newsockfd = ((proof_t*)proof)->newsockfd;
 	
 	while(n != 0){
-	if (newsockfd < 0) 
-	{
-		perror("ERROR on accept");
-		exit(1);
-	}
 	
 	bzero(buffer,MAX_BUF + 1);
 
@@ -360,7 +371,6 @@ void* receptionist(void* proof){
 		then process */
 	
 	n = read(newsockfd,buffer,MAX_BUF);
-
 	if (n < 0) 
 	{
 		perror("ERROR reading from socket");
@@ -431,11 +441,11 @@ void* receptionist(void* proof){
 		}
 	}
 
-	
 	if (n < 0) 
 	{
 		perror("ERROR writing to socket");
-		exit(1);
+		break;
+		//exit(1);
 	}
 	}
 	
