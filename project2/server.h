@@ -36,6 +36,7 @@ char* abrt = "ERRO nothing to abort";
 typedef struct {
 	int newsockfd;
 	pthread_t thread_id;
+	pthread_t* friends;
 	uint32_t IP;
 	int index;
 	int offset;
@@ -205,7 +206,7 @@ void* add_queue(void* param){
 //worker thread to find a solution to a work problem 
 void* worker(void* info){
 	int newsockfd = ((proof_t*)info)->newsockfd,index = ((proof_t*)info)->index,
-	i, n, j = 0, offset = ((proof_t*)info)->offset ;
+	i, n, j = 0, offset = ((proof_t*)info)->offset, num ;
 	char buffer[strlen(((proof_t*)info)->string) + 1];
 	char seed_char[MAX_SEED + 1], store[3], message[255];
 	BYTE seed[MAX_SEED], input, two_num = 2;
@@ -225,7 +226,7 @@ void* worker(void* info){
 	uint256_init(beta_256);
 	
 	//scan string and store values appropriately
-	sscanf(buffer, "WORK %x %s %llx", &diff, seed_char, &soln);
+	sscanf(buffer, "WORK %x %s %llx %x\r\n", &diff, seed_char, &soln, &num);
 	seed_char[64] = '\0';
 	
 	//scan char into unsigned char
@@ -261,8 +262,13 @@ void* worker(void* info){
 	uint256_exp(exp, two, 8*(alpha - 3));
 	uint256_mul(target, beta_256, exp);
 	
-	while(work_queue[index] != NULL){
+	while(1){
+		sem_wait(&work_mutex);
+		if(work_queue[index] == NULL){
+			return NULL;
+		}
 		sem_post(&work_mutex);
+		
 		soln+=offset;
 		//fprintf(stderr, "trying soln: %llx\n", soln);
 		//concatenate soln into seed
@@ -286,17 +292,16 @@ void* worker(void* info){
 		
 		if( sha256_compare(hash2, target) < 0){
 			//write necessary output
+			sem_wait(&work_mutex);
 			sprintf(message, "SOLN %x %s %llx\r\n", diff, seed_char, soln);
 			n = write(newsockfd, message ,strlen(message));
+		
 			//remove from queue
-			sem_wait(&work_mutex);
 			work_queue[index] = NULL;
 			sem_post(&work_mutex);
 			return NULL;
 		}
-		
 		soln++;
-		sem_wait(&work_mutex);
 	}
 	return NULL;
 }
