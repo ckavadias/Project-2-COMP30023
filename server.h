@@ -21,6 +21,7 @@
 #define MAX_SEED 64
 #define MAX_UINT 32
 #define QUEUE_SIZE 10
+#define ON 1
 
 //standard error messages
 char* pong = "ERRO PONG is only for the server";
@@ -36,10 +37,9 @@ char* abrt = "ERRO nothing to abort";
 typedef struct {
 	int newsockfd;
 	pthread_t thread_id;
-	pthread_t* friends;
+	pthread_t* workers;
 	uint32_t IP;
 	int index;
-	int offset;
 	char* string;
 }proof_t;
 
@@ -112,7 +112,7 @@ void* is_solution(void* param){
 	uint256_init(beta_256);
 	
 	//scan string and store values appropriately
-	sscanf(buffer, "SOLN %x %s %llx\r\n", &diff, seed_char, &soln);
+	sscanf(buffer, "SOLN %x %s %llx \r\n", &diff, seed_char, &soln);
 	seed_char[64] = '\0';
 	
 	//scan char into unsigned char
@@ -194,6 +194,7 @@ void* add_queue(void* param){
 			copy.index = next_ready;
 			work_queue[next_ready] = (proof_t*)malloc(sizeof(proof_t));
 			*(work_queue[next_ready]) = copy;
+			work_queue[next_ready]->workers = NULL;
 			next_ready++;
 			next_ready%=QUEUE_SIZE;
 			added++;
@@ -203,12 +204,25 @@ void* add_queue(void* param){
 	return NULL;
 }
 
+//kill all threads in an array except maybe one
+void kill_threads(pthread_t* threads, int except, int len){
+	int i ;
+	
+	fprintf(stderr, "EXCEPT: %d\n" , except);
+	for(i = 0; i < len; i++){
+		if(i != except){
+			pthread_cancel(threads[i]);
+			perror("ERROR in kill_threads:");
+		}
+	}
+}
+
 //worker thread to find a solution to a work problem 
 void* worker(void* info){
 	int newsockfd = ((proof_t*)info)->newsockfd,index = ((proof_t*)info)->index,
-	i, n, j = 0, offset = ((proof_t*)info)->offset, num ;
+	i, n, j = 0, num;
 	char buffer[strlen(((proof_t*)info)->string) + 1];
-	char seed_char[MAX_SEED + 1], store[3], message[255];
+	char seed_char[MAX_SEED + 1], store[3], message[MAX_BUF];
 	BYTE seed[MAX_SEED], input, two_num = 2;
 	BYTE two[MAX_UINT], beta_256[MAX_UINT], exp[MAX_UINT], target[MAX_UINT];
 	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE];
@@ -226,7 +240,7 @@ void* worker(void* info){
 	uint256_init(beta_256);
 	
 	//scan string and store values appropriately
-	sscanf(buffer, "WORK %x %s %llx %x\r\n", &diff, seed_char, &soln, &num);
+	sscanf(buffer, "WORK %x %s %llx %x \r\n", &diff, seed_char, &soln, &num);
 	seed_char[64] = '\0';
 	
 	//scan char into unsigned char
@@ -263,14 +277,7 @@ void* worker(void* info){
 	uint256_mul(target, beta_256, exp);
 	
 	while(1){
-		sem_wait(&work_mutex);
-		if(work_queue[index] == NULL){
-			return NULL;
-		}
-		sem_post(&work_mutex);
-		
-		soln+=offset;
-		//fprintf(stderr, "trying soln: %llx\n", soln);
+
 		//concatenate soln into seed
 		for(i = 0; i < 8; i++){
 			mask_64 = soln;
@@ -291,13 +298,21 @@ void* worker(void* info){
 		sha256_final(&ctx2, hash2);
 		
 		if( sha256_compare(hash2, target) < 0){
-			//write necessary output
 			sem_wait(&work_mutex);
-			sprintf(message, "SOLN %x %s %llx\r\n", diff, seed_char, soln);
+			if(work_queue[index] == NULL){
+				sem_post(&work_mutex);
+				return NULL;
+			}
+			//write necessary output
+			sprintf(message, "SOLN %08x %s %016llx \r\n", diff, seed_char, soln);
+			fprintf(stderr,"%s\n\n", message);
 			n = write(newsockfd, message ,strlen(message));
-		
+			
 			//remove from queue
+			free(work_queue[index]->workers);
+			free(work_queue[index]);
 			work_queue[index] = NULL;
+			
 			sem_post(&work_mutex);
 			return NULL;
 		}
@@ -308,24 +323,20 @@ void* worker(void* info){
 
 //persistent worker thread to call worker
 void* work_manager(){
-	pthread_t current;
-	int next = 0, n, i;
-	uint32_t x;
-	uint64_t y;
-	char d[MAX_SEED + 1];
+	int next = 0;
 	
 	while(1){
 		//mutex check
 		sem_wait(&work_mutex);
 	
 		//see if queue empty
-		if(work_queue[next] != NULL){
+		if(work_queue[next] != NULL && work_queue[next]->workers == NULL){
+			
 			//if not take next job and call worker
-            sscanf(work_queue[next]->string, "WORK %x %s %llx %x", &x,d,&y, &n);
-            for( i = 0;  i < n; i++){
-            	work_queue[next]->offset = i;
-            	pthread_create(&current, NULL, worker, work_queue[next]);
-            }
+            work_queue[next]->workers = (pthread_t*)malloc(sizeof(pthread_t));
+           	pthread_create(work_queue[next]->workers,NULL,worker, 
+            												  work_queue[next]);
+  
 			//increment next_ready and modulus QUEUE_SIZE
 			next++;
 			next%=QUEUE_SIZE;
@@ -341,14 +352,18 @@ void* kill_them_all(void* num){
 	int kills = 0;
 	char error[MAX_ERR + 1];
 	
+	
 	sem_wait(&work_mutex);
 	for( i = 0; i < QUEUE_SIZE; i++){
 		if(work_queue[i] != NULL && work_queue[i]->newsockfd == newsockfd){
-			pthread_cancel(work_queue[i]->thread_id);
+			free(work_queue[i]->workers);
+			free(work_queue[i]);
 			work_queue[i] = NULL;
 			kills++;
 		}
 	}
+	sem_post(&work_mutex);
+	
 	if(kills){
 		write(newsockfd, "OKAY\r\n", 6);
 	}
@@ -356,7 +371,7 @@ void* kill_them_all(void* num){
 		sprintf(error,"%s%*c\r\n", abrt, off-strlen(abrt),'#');
 		write(newsockfd, error, MAX_ERR);
 	}
-	sem_post(&work_mutex);
+	
 	return NULL;
 }
 

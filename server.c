@@ -12,8 +12,8 @@ int main(int argc, char **argv)
 	
 	//open log and initialise semaphores
 	log_open();
-	sem_init(&log_mutex, 0, 1);
-	sem_init(&work_mutex, 0, 1);
+	sem_init(&log_mutex, 0, ON);
+	sem_init(&work_mutex, 0, ON);
 
 	if (argc < 2) 
 	{
