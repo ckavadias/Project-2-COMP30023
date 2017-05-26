@@ -43,6 +43,17 @@ typedef struct {
 	char* string;
 }proof_t;
 
+typedef struct {
+	int offset;
+	uint64_t soln;
+	BYTE* seed;
+	BYTE* target;
+	int* finished;
+	uint64_t* final;
+	sem_t* sem;
+	int index;
+}pass_t;
+
 //shared parameters
 int off = MAX_ERR - 2;
 proof_t* work_queue[QUEUE_SIZE];
@@ -180,6 +191,7 @@ void* is_solution(void* param){
 //thread to add to queue to ensure mutex lock doesnt prevent repsonses
 void* add_queue(void* param){
 	int added = 0;
+	char* copy_s;
 	proof_t copy = *((proof_t*)param);
 	
 	//The entry specified by next ready may not be empty yet but we can't
@@ -190,49 +202,106 @@ void* add_queue(void* param){
 	while(!added){
 		
 		sem_wait(&work_mutex);
+		//we copies of everything to avoid possible overwrites
 		if(work_queue[next_ready] == NULL){
+			
 			copy.index = next_ready;
 			work_queue[next_ready] = (proof_t*)malloc(sizeof(proof_t));
 			*(work_queue[next_ready]) = copy;
+			copy_s = (char*)malloc(sizeof(char)*(strlen(copy.string) + 1));
+			strcpy(copy_s, copy.string);
+			copy.string = copy_s;
 			work_queue[next_ready]->workers = NULL;
 			next_ready++;
 			next_ready%=QUEUE_SIZE;
 			added++;
+			
 		}
 		sem_post(&work_mutex);
 	}
+	
 	return NULL;
 }
 
+//solve work
+void* solver(void* info){
+	
+	uint64_t soln = ((pass_t*)info)->soln, *final = ((pass_t*)info)->final,
+	mask_64;
+	int* finished = ((pass_t*)info)->finished, offset = ((pass_t*)info)->offset,
+	i, index = ((pass_t*)info)->index;
+	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE], seed[MAX_SEED],
+	zero[MAX_UINT], input;
+	SHA256_CTX ctx, ctx2;
+	
+	uint256_init(zero);
+	uint256_add(seed, zero, ((pass_t*)info)->seed);
+	
+	while(1){
+		
+		//concatenate soln into seed
+		for(i = 0; i < 8; i++){
+			mask_64 = soln;
+			mask_64 = mask_64<<(56 - 8*i);
+			mask_64 = mask_64>>56;
+			input = (BYTE)mask_64;
+			seed[39 - i] = mask_64;
+		}
+	
+		//hash seed
+		sha256_init(&ctx);
+		sha256_update(&ctx, seed, 40);
+		sha256_final(&ctx, hash);
+	
+		//hash the hash
+		sha256_init(&ctx2);
+		sha256_update(&ctx2, hash, SHA256_BLOCK_SIZE);
+		sha256_final(&ctx2, hash2);
+		
+		if(work_queue[index] == NULL){
+				return NULL;
+		}
+		
+		if( sha256_compare(hash2, ((pass_t*)info)->target) < 0){
+			//get sem, set final, set finished
+			sem_wait(((pass_t*)info)->sem);
+			if(!(*finished)){
+				*final = soln;
+				*finished = 1;
+			}
+			sem_post(((pass_t*)info)->sem);
+			break;
+		}
+		soln+=offset;
+	}
+	return NULL;
+}
 //kill all threads in an array except maybe one
-void kill_threads(pthread_t* threads, int except, int len){
+void kill_threads(pthread_t* threads, int len){
 	int i ;
 	
-	fprintf(stderr, "EXCEPT: %d\n" , except);
 	for(i = 0; i < len; i++){
-		if(i != except){
-			pthread_cancel(threads[i]);
-			perror("ERROR in kill_threads:");
-		}
+		pthread_cancel(threads[i]);
 	}
 }
 
 //worker thread to find a solution to a work problem 
 void* worker(void* info){
 	int newsockfd = ((proof_t*)info)->newsockfd,index = ((proof_t*)info)->index,
-	i, n, j = 0, num;
+	i, n, j = 0, num, made = 0, finished = 0;
 	char buffer[strlen(((proof_t*)info)->string) + 1];
 	char seed_char[MAX_SEED + 1], store[3], message[MAX_BUF];
 	BYTE seed[MAX_SEED], input, two_num = 2;
 	BYTE two[MAX_UINT], beta_256[MAX_UINT], exp[MAX_UINT], target[MAX_UINT];
-	BYTE hash[SHA256_BLOCK_SIZE], hash2[SHA256_BLOCK_SIZE];
 	uint32_t diff, alpha, beta, mask;
-	uint64_t soln, mask_64;
-	SHA256_CTX ctx, ctx2;
+	uint64_t soln;
+	pthread_t* workers;
+	pass_t* passes;
+	sem_t sem;
 
 	strcpy(buffer, ((proof_t*)info)->string);
 	store[2] = '\0';
-	
+	sem_init(&sem, 0, ON);
 	//initialise 2 in uint256_t form
 	uint256_init(two);
 	two[31] = two_num;
@@ -240,7 +309,7 @@ void* worker(void* info){
 	uint256_init(beta_256);
 	
 	//scan string and store values appropriately
-	sscanf(buffer, "WORK %x %s %llx %x \r\n", &diff, seed_char, &soln, &num);
+	sscanf(buffer, "WORK %x %s %llx %x\r\n", &diff, seed_char, &soln, &num);
 	seed_char[64] = '\0';
 	
 	//scan char into unsigned char
@@ -276,49 +345,60 @@ void* worker(void* info){
 	uint256_exp(exp, two, 8*(alpha - 3));
 	uint256_mul(target, beta_256, exp);
 	
-	while(1){
-
-		//concatenate soln into seed
-		for(i = 0; i < 8; i++){
-			mask_64 = soln;
-			mask_64 = mask_64<<(56 - 8*i);
-			mask_64 = mask_64>>56;
-			input = (BYTE)mask_64;
-			seed[39 - i] = mask_64;
-		}
-	
-		//hash seed
-		sha256_init(&ctx);
-		sha256_update(&ctx, seed, 40);
-		sha256_final(&ctx, hash);
-	
-		//hash the hash
-		sha256_init(&ctx2);
-		sha256_update(&ctx2, hash, SHA256_BLOCK_SIZE);
-		sha256_final(&ctx2, hash2);
+	//num = 1;
+	//If I were to make multithreaded workers this is where it should 
+	//start to branch off, all data above is shared data
+	workers = (pthread_t*)malloc(sizeof(pthread_t)*num);
+	passes = (pass_t*)malloc(sizeof(pass_t)*num);
+	sem_wait(&sem);
+	for(i = 0; i < num; i++){
 		
-		if( sha256_compare(hash2, target) < 0){
-			sem_wait(&work_mutex);
-			if(work_queue[index] == NULL){
-				sem_post(&work_mutex);
-				return NULL;
-			}
-			//write necessary output
-			sprintf(message, "SOLN %08x %s %016llx \r\n", diff, seed_char, soln);
-			fprintf(stderr,"%s\n\n", message);
-			n = write(newsockfd, message ,strlen(message));
-			
-			//remove from queue
-			free(work_queue[index]->workers);
-			free(work_queue[index]);
-			work_queue[index] = NULL;
-			
-			sem_post(&work_mutex);
-			return NULL;
-		}
-		soln++;
+		//initialise relevant info
+		passes[i].offset = num;
+		passes[i].soln = soln + i;
+		passes[i].seed = seed;
+		passes[i].target = target;
+		passes[i].finished = &finished;
+		passes[i].final = &soln;
+		passes[i].sem = &sem;
+		passes[i].index = index;
+		
+		//make thread and record
+		pthread_create(workers + i, NULL, solver, passes + i);
+		made++;
 	}
+	sem_post(&sem);
+	
+	while(!finished){
+		//just wait for a solution to be found
+	}
+	
+	sem_wait(&sem);
+	sem_wait(&work_mutex);
+			
+	if(work_queue[index] == NULL){
+		fprintf(stderr, "NULL work item\n");
+		sem_post(&work_mutex);
+		return NULL;
+	}
+	
+	//write necessary output
+	sprintf(message, "SOLN %08x %s %016llx \r\n", diff, seed_char,soln);
+	n = write(newsockfd, message ,strlen(message));
+	
+	//kill all threads
+	kill_threads(workers, num);
+
+	//remove from queue
+	//free(work_queue[index]->workers);
+	free(workers);
+	free(passes);
+	free(work_queue[index]);
+	work_queue[index] = NULL;
+	sem_post(&work_mutex);
+	sem_post(&sem);
 	return NULL;
+	
 }
 
 //persistent worker thread to call worker
@@ -330,13 +410,13 @@ void* work_manager(){
 		sem_wait(&work_mutex);
 	
 		//see if queue empty
-		if(work_queue[next] != NULL && work_queue[next]->workers == NULL){
-			
-			//if not take next job and call worker
-            work_queue[next]->workers = (pthread_t*)malloc(sizeof(pthread_t));
-           	pthread_create(work_queue[next]->workers,NULL,worker, 
-            												  work_queue[next]);
-  
+		if(work_queue[next] != NULL ){
+			if(work_queue[next]->workers == NULL){
+				//if not take next job and call worker
+				work_queue[next]->workers=(pthread_t*)malloc(sizeof(pthread_t));
+				pthread_create(work_queue[next]->workers,NULL,worker, 
+         	   												  work_queue[next]);
+         	}
 			//increment next_ready and modulus QUEUE_SIZE
 			next++;
 			next%=QUEUE_SIZE;
@@ -352,10 +432,10 @@ void* kill_them_all(void* num){
 	int kills = 0;
 	char error[MAX_ERR + 1];
 	
-	
 	sem_wait(&work_mutex);
 	for( i = 0; i < QUEUE_SIZE; i++){
 		if(work_queue[i] != NULL && work_queue[i]->newsockfd == newsockfd){
+			pthread_cancel(work_queue[i]->workers[0]);
 			free(work_queue[i]->workers);
 			free(work_queue[i]);
 			work_queue[i] = NULL;
@@ -384,7 +464,6 @@ void* receptionist(void* proof){
 	newsockfd = ((proof_t*)proof)->newsockfd;
 	
 	while(n != 0){
-	
 	bzero(buffer,MAX_BUF + 1);
 
 	/* Read characters from the connection,
@@ -394,7 +473,7 @@ void* receptionist(void* proof){
 	if (n < 0) 
 	{
 		perror("ERROR reading from socket");
-		exit(1);
+		break;
 	}
 	
 	//check which protocol is being used and respond appropriately
@@ -460,7 +539,6 @@ void* receptionist(void* proof){
 			n = write(newsockfd, error ,MAX_ERR);
 		}
 	}
-
 	if (n < 0) 
 	{
 		perror("ERROR writing to socket");
