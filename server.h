@@ -126,7 +126,7 @@ void* is_solution(void* param){
 	sscanf(buffer, "SOLN %x %s %llx \r\n", &diff, seed_char, &soln);
 	seed_char[64] = '\0';
 	
-	//scan char into unsigned char
+	//convert char representation of hexadecimal into unsigned char
 	for(i = 0; i < strlen(seed_char); i+=2){
 		
 		store[0] = seed_char[i];
@@ -199,10 +199,13 @@ void* add_queue(void* param){
 	//cycle through holding and letting go of the lock to allow other 
 	//threads to grab the lock and process entries to free array space
 	
+	//This allows us to simulate one-by-one processing and also stop possible
+	//work from being lost due to a full queue
+	
 	while(!added){
 		
 		sem_wait(&work_mutex);
-		//we copies of everything to avoid possible overwrites
+		//we make copies of everything to avoid possible overwrites
 		if(work_queue[next_ready] == NULL){
 			
 			copy.index = next_ready;
@@ -225,7 +228,6 @@ void* add_queue(void* param){
 
 //solve work
 void* solver(void* info){
-	
 	uint64_t soln = ((pass_t*)info)->soln, *final = ((pass_t*)info)->final,
 	mask_64;
 	int* finished = ((pass_t*)info)->finished, offset = ((pass_t*)info)->offset,
@@ -234,6 +236,7 @@ void* solver(void* info){
 	zero[MAX_UINT], input;
 	SHA256_CTX ctx, ctx2;
 	
+	//make a local copy of seed in order to facilitate concatenation of soln
 	uint256_init(zero);
 	uint256_add(seed, zero, ((pass_t*)info)->seed);
 	
@@ -345,9 +348,12 @@ void* worker(void* info){
 	uint256_exp(exp, two, 8*(alpha - 3));
 	uint256_mul(target, beta_256, exp);
 	
-	//num = 1;
-	//If I were to make multithreaded workers this is where it should 
-	//start to branch off, all data above is shared data
+	//all of the above data is to be used as is for each solver thread
+	//passing to each thread with the pass_t struct type, we use a local 
+	//semaphore so that each worker isn't competing unnecessarily and the flag 
+	//finished to avoid solver threads overwriting each other or accessing freed
+	//pointers
+	
 	workers = (pthread_t*)malloc(sizeof(pthread_t)*num);
 	passes = (pass_t*)malloc(sizeof(pass_t)*num);
 	sem_wait(&sem);
@@ -390,7 +396,7 @@ void* worker(void* info){
 	kill_threads(workers, num);
 
 	//remove from queue
-	//free(work_queue[index]->workers);
+	free(work_queue[index]->workers);
 	free(workers);
 	free(passes);
 	free(work_queue[index]);
@@ -411,6 +417,7 @@ void* work_manager(){
 	
 		//see if queue empty
 		if(work_queue[next] != NULL ){
+			//this ensures a running thread is not overwritten
 			if(work_queue[next]->workers == NULL){
 				//if not take next job and call worker
 				work_queue[next]->workers=(pthread_t*)malloc(sizeof(pthread_t));
@@ -432,6 +439,10 @@ void* kill_them_all(void* num){
 	int kills = 0;
 	char error[MAX_ERR + 1];
 	
+	
+	//using the NULL assignment as flag ensures any related solver threads will
+	//kill themselves as access to their identifiers is held locally in 
+	//the corresponding worker threads
 	sem_wait(&work_mutex);
 	for( i = 0; i < QUEUE_SIZE; i++){
 		if(work_queue[i] != NULL && work_queue[i]->newsockfd == newsockfd){
@@ -477,7 +488,6 @@ void* receptionist(void* proof){
 	}
 	
 	//check which protocol is being used and respond appropriately
-	//(need to add security check for message lengths)
 	if(n > 0){
 		buffer[n] = '\0';
 		strcpy(passing, buffer);
@@ -543,7 +553,6 @@ void* receptionist(void* proof){
 	{
 		perror("ERROR writing to socket");
 		break;
-		//exit(1);
 	}
 	}
 	
